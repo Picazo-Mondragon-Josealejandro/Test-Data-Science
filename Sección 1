@@ -1,0 +1,185 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sat Mar  9 18:11:27 2024
+
+@author: alex1
+"""
+
+import pandas as pd
+import requests
+from io import BytesIO
+
+# Definir la URL del archivo parquet
+url1 = 'https://datamxdevsa.blob.core.windows.net/crskmex000/DSTest/0saldos.parquet'
+url2 = 'https://datamxdevsa.blob.core.windows.net/crskmex000/DSTest/0transferencias.parquet'
+url3 = 'https://datamxdevsa.blob.core.windows.net/crskmex000/DSTest/0clientes.parquet'
+
+# Realizar una solicitud GET para obtener el contenido del archivo
+response1 = requests.get(url1)
+file_content1 = response1.content
+buffer1 = BytesIO(file_content1)
+response2 = requests.get(url2)
+file_content2 = response2.content
+buffer2 = BytesIO(file_content2)
+response3 = requests.get(url3)
+file_content3 = response3.content
+buffer3 = BytesIO(file_content3)
+
+# Observación de Base de datos
+df_saldos = pd.read_parquet(buffer1, engine='pyarrow')
+df_saldos.head()
+df_transaccion = pd.read_parquet(buffer2, engine='pyarrow')
+df_transaccion.head()
+df_clientes = pd.read_parquet(buffer3, engine='pyarrow')
+df_clientes.head()
+
+# Fusionar datos
+df_fusion = pd.merge(df_saldos, df_clientes,how="left", on='NroDocum') 
+
+# Quitar variables no relevantes para el modelo
+df_fusion.drop(["TIPODOCUM","EnvioExtractos"],axis=1, inplace=True)
+
+# Observación de datos
+df_fusion["CIUDAD"].value_counts().head(11) #Nos quedamos con las principales ciudades
+ciudades = ["BOGOTA D.C., BOGOTA",
+            "CALI, VALLE DEL CAUCA",
+            "MEDELLIN, ANTIOQUIA",
+            "BARRANQUILLA, ATLANTICO",
+            "CARTAGENA, BOLIVAR",
+            "CHIA, CUNDINAMARCA",
+            "BUCARAMANGA, SANTANDER",
+            "ENVIGADO, ANTIOQUIA",
+            "CAJICA, CUNDINAMARCA",
+            "YOPAL, CASANARE",
+            "MANIZALES, CALDAS"]
+df_fusion= df_fusion[df_fusion["CIUDAD"].isin(ciudades)]
+df_fusion.shape
+df_fusion.rename(columns={"FecNacim":"Edad"},inplace=True)
+df_fusion["Edad"].value_counts()
+df_fusion['Edad'] = pd.to_datetime(df_fusion['Edad'])
+df_fusion["Edad"] = df_fusion['Edad'].dt.strftime('%Y-%m-%d') #Tomaremos el año 2010 como referencia para las edad
+df_fusion['Edad'] = pd.to_datetime(df_fusion['Edad'])
+df_fusion["Edad"] = 2010 - df_fusion["Edad"].dt.year
+
+df_fusion.isnull().sum()
+df_fusion.dtypes
+
+# Hacer Dummys
+from sklearn import preprocessing
+
+le = preprocessing.LabelEncoder()
+df_final = df_fusion.apply(le.fit_transform)
+df_final.head()
+
+df_final["CIUDAD"].value_counts()
+df_final["Edad"].value_counts()
+df_final.describe()
+
+# Exploración de datos
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+CIUDAD_count = df_final['CIUDAD'].value_counts(dropna = False)
+CIUDAD_count
+sns.set(rc={'figure.figsize': (20, 10)})
+sns.barplot(x=CIUDAD_count.index, y=CIUDAD_count.values)
+plt.title('Muestra Ciudades', fontsize=16)
+plt.ylabel('Count', fontsize=14)
+plt.xlabel('CIUDAD', fontsize=14)
+plt.xticks(rotation=45)
+plt.show()
+
+label = df_final.Edad.value_counts().index
+label_count = df_final.Edad.value_counts().values
+plt.pie(data=df_final, x=label_count, labels=label, autopct='%1.1f%%', shadow=True, radius=1)
+plt.show()
+
+plt.figure(figsize=(15,10))
+c= df_final.corr()
+sns.heatmap(c,cmap="BrBG",annot=True)
+c
+
+df_final.hist(figsize=(10, 10))
+
+# Modelado
+
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+
+X = df_final  
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+kmeans = KMeans(n_clusters=4, random_state=42)  
+kmeans.fit(X)
+
+clusters = kmeans.predict(X)
+
+# Agregando la información de los clusters al DataFrame original
+df_final['cluster'] = clusters
+
+cluster_means = df_final.groupby('cluster').mean()
+cluster_means
+
+# Poder predictivo
+
+from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeClassifier
+
+# Dividir los datos en conjuntos de entrenamiento y prueba
+df_train_x = df_final.drop('cluster',axis = 1)
+df_train_y = df_final['cluster']
+x_train, x_test, y_train, y_test = train_test_split(df_train_x, df_train_y, test_size=0.20, random_state=42)
+
+dtree = DecisionTreeClassifier(random_state=1)
+dtree = dtree.fit(x_train, y_train)
+
+from sklearn.metrics import confusion_matrix,accuracy_score
+
+y_pred = dtree.predict(x_test)
+cm = confusion_matrix(y_test,y_pred)
+accuracy = accuracy_score(y_test,y_pred)
+print("confusion matrics=",cm)
+print("  ")
+print("accuracy=",accuracy)
+
+
+df_final.rename(columns={"SALDO_202101":"SALDO_2021O1"},inplace= True)
+
+for i in range(2, 10):
+    df_final[f'variacion_saldo_{i-1}'] = df_final[f'SALDO_2021O{i}'] - df_final[f'SALDO_2021O{i-1}']
+df_final["variacion_saldo_9"] = df_final['SALDO_202110'] - df_final['SALDO_2021O9']
+for i in range(11,13 ):
+    df_final[f'variacion_saldo_{i-1}'] = df_final[f'SALDO_2021{i}'] - df_final[f'SALDO_2021{i-1}']
+df_final["variacion_saldo_12"] = df_final['SALDO_202201'] - df_final['SALDO_202112']
+for i in range(2, 10):
+    df_final[f'variacion_saldo_{i+11}'] = df_final[f'SALDO_20220{i}'] - df_final[f'SALDO_20220{i-1}']
+df_final["variacion_saldo_21"] = df_final['SALDO_202210'] - df_final['SALDO_202209']
+    
+# Identificar los meses con retiros significativos (últimos 6 meses)
+meses_con_retiros = [f'variacion_saldo_{i}' for i in range(16, 22)]
+
+# Calcular la suma de las variaciones de saldo en los últimos 6 meses para cada cliente
+df_final['saldo_retiros_ultimos_meses'] = df_final[meses_con_retiros].sum(axis=1)
+
+# Calcular la suma de los saldos de los últimos 6 meses para cada cliente
+ultimos_6_meses = df_final.iloc[:,17:23].columns
+df_final['saldo_total_ultimos_meses'] = df_final[ultimos_6_meses].sum(axis=1) 
+
+# Calcular la proporción de saldo retirado en los últimos meses para cada cliente
+df_final['proporcion_saldo_retiros'] = df_final['saldo_retiros_ultimos_meses'] / df_final['saldo_total_ultimos_meses']
+
+df_final["proporcion_saldo_retiros"].abs()
+
+# Estimar la probabilidad de retiro futuro (suponiendo que la proporción de saldo retirado en los últimos meses es una buena estimación)
+# Se podría aplicar una regla específica aquí, como definir que si la proporción de saldo retirado es mayor o igual al 70%, entonces la probabilidad es 1, de lo contrario, es 0
+df_final['probabilidad_retiro_70_por_ciento'] = df_final['proporcion_saldo_retiros'].apply(lambda x: 1 if x >= 0.7 else 0)
+
+clientes_retiro = df_final[df_final["probabilidad_retiro_70_por_ciento"] == 1 ]
+
+Nro_Docum = clientes_retiro["NroDocum"]
+Nro_Docum = pd.DataFrame(Nro_Docum)
+Nro_Docum.reset_index(inplace=True)
+Nro_Docum.drop(["index"],inplace=True,axis=1)
+
+Nro_Docum
