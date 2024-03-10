@@ -171,8 +171,6 @@ df_final['proporcion_saldo_retiros'] = df_final['saldo_retiros_ultimos_meses'] /
 
 df_final["proporcion_saldo_retiros"].abs()
 
-# Estimar la probabilidad de retiro futuro (suponiendo que la proporción de saldo retirado en los últimos meses es una buena estimación)
-# Se podría aplicar una regla específica aquí, como definir que si la proporción de saldo retirado es mayor o igual al 70%, entonces la probabilidad es 1, de lo contrario, es 0
 df_final['probabilidad_retiro_70_por_ciento'] = df_final['proporcion_saldo_retiros'].apply(lambda x: 1 if x >= 0.7 else 0)
 
 clientes_retiro = df_final[df_final["probabilidad_retiro_70_por_ciento"] == 1 ]
